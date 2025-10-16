@@ -1,9 +1,10 @@
 {
   "authorized_ips": [
-    "91.123.45.67",        // autorise tous les ports sur cette IP
+    "0.0.0.0:0",        // autorise tous les ports sur cette IP
     "51.222.145.32:27015", // autorise uniquement le port 27015
     "192.168.1.104:27015"  // exemple LAN / tests
   ],
   "disabled": false,
   "message": "Addon désactivé par l'auteur."
 }
+
