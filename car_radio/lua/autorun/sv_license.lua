@@ -53,6 +53,78 @@ local function licenseLockdown(reason, ipDisplay)
     broadcastLicenseWarn(ipDisplay)
 end
 
+local LOCAL_LICENSE_PATHS = {
+    "addons/car_radio/license.json",
+    "car_radio/license.json",
+    "license.json",
+}
+
+local function readLocalLicenseFile()
+    for _, path in ipairs(LOCAL_LICENSE_PATHS) do
+        local f = file.Open(path, "r", "GAME")
+        if f then
+            local size = f:Size() or 0
+            local body = size > 0 and f:Read(size) or ""
+            f:Close()
+            if isstring(body) and body ~= "" then
+                return body, path
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function processLicenseTable(tbl, ip, sourceLabel)
+    if not istable(tbl) then
+        return false, "Réponse de licence invalide."
+    end
+
+    if tbl.disabled then
+        local msg = isstring(tbl.message) and tbl.message or "Addon désactivé par l'auteur."
+        licenseLockdown(msg, ip)
+        return true
+    end
+
+    local list = istable(tbl.authorized_ips) and tbl.authorized_ips or nil
+    if not list then
+        return false, "Champ authorized_ips manquant."
+    end
+
+    local authorized = false
+    for _, v in ipairs(list) do
+        if ipMatches(ip, v) then authorized = true break end
+    end
+
+    if authorized then
+        _G.CAR_RADIO_LICENSE_VALID = true
+        local lbl = sourceLabel and (" via " .. sourceLabel) or ""
+        print(string.format("[CarRadio] ✅ Licence valide pour ce serveur (%s%s).", tostring(ip), lbl))
+        return true
+    end
+
+    licenseLockdown("Licence invalide pour ce serveur.", ip)
+    return true
+end
+
+local function tryLocalFallback(ip, baseReason)
+    local body, path = readLocalLicenseFile()
+    if not body then
+        licenseLockdown(baseReason or "Licence introuvable.", ip)
+        return
+    end
+
+    local ok, data = pcall(util.JSONToTable, body)
+    if not ok then
+        licenseLockdown((baseReason or "Licence invalide.") .. " (fallback local corrompu)", ip)
+        return
+    end
+
+    local handled, err = processLicenseTable(data, ip, path or "local")
+    if handled then return end
+
+    licenseLockdown((baseReason or "Licence invalide.") .. " (fallback local incomplet)", ip)
+end
+
 -- ========= RÉSOLUTION IP (sync + fallback HTTP) =========
 -- Appelle cb(ip_string) avec une IP:PORT fiable (jamais 'unknown' si internet OK)
 local function resolveServerIPAsync(cb)
@@ -110,34 +182,26 @@ timer.Simple(5, function()
     resolveServerIPAsync(function(ip)
         print("[CarRadio] Vérification de licence pour: " .. tostring(ip))
 
+        local function handleBadRemote(reason)
+            tryLocalFallback(ip, reason or "Licence distante indisponible.")
+        end
+
         http.Fetch(
             LICENSE_URL,
             function(body)
                 local ok, data = pcall(util.JSONToTable, body)
-                if not ok or type(data) ~= "table" then
-                    return licenseLockdown("Réponse de licence invalide.", ip)
+                if not ok then
+                    handleBadRemote("Réponse de licence invalide.")
+                    return
                 end
 
-                if data.disabled then
-                    local msg = isstring(data.message) and data.message or "Addon désactivé par l'auteur."
-                    return licenseLockdown(msg, ip)
-                end
+                local handled, err = processLicenseTable(data, ip, "GitHub")
+                if handled then return end
 
-                local list = istable(data.authorized_ips) and data.authorized_ips or {}
-                local authorized = false
-                for _, v in ipairs(list) do
-                    if ipMatches(ip, v) then authorized = true break end
-                end
-
-                if authorized then
-                    _G.CAR_RADIO_LICENSE_VALID = true
-                    print("[CarRadio] ✅ Licence valide pour ce serveur (" .. ip .. ").")
-                else
-                    licenseLockdown("Licence invalide pour ce serveur.", ip)
-                end
+                handleBadRemote(err or "Données de licence incomplètes.")
             end,
             function(err)
-                licenseLockdown("Échec HTTP de vérification de licence : " .. tostring(err), ip)
+                handleBadRemote("Échec HTTP de vérification de licence : " .. tostring(err))
             end
         )
     end)
