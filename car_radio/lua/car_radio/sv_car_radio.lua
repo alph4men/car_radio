@@ -1,4 +1,4 @@
--- sv_car_radio.lua — conducteur-only + 1 voiture max + whitelist + GAIN véhicule + envoie initiateur SID64
+-- sv_car_radio.lua — serveur principal de la radio voiture
 if not SERVER then return end
 
 if istable(CAR_RADIO) and CAR_RADIO.__server_core_loaded then return end
@@ -10,31 +10,37 @@ util.AddNetworkString("CAR_RADIO_RequestPlay")
 util.AddNetworkString("CAR_RADIO_RequestStop")
 util.AddNetworkString("CAR_RADIO_Play")
 util.AddNetworkString("CAR_RADIO_Stop")
-util.AddNetworkString("CAR_RADIO_SetGain") -- slider volume
+util.AddNetworkString("CAR_RADIO_SetGain")
 
--- ===== Licence =====
+-- =========================================================
+--  Helpers licence & autorisations
+-- =========================================================
 local function Licensed()
     return _G.CAR_RADIO_LICENSE_VALID == true
 end
 
--- ===== Autorisations (depuis config server) =====
 _G.CAR_RADIO_AUTH = _G.CAR_RADIO_AUTH or { allow_all = true, allowed = {} }
-local function IsPlyAllowed(ply)
+
+local function IsAuthorized(ply)
     if not IsValid(ply) then return false end
     if ply:IsSuperAdmin() then return true end
+
     local auth = _G.CAR_RADIO_AUTH
-    if not auth then return true end
-    if auth.allow_all then return true end
+    if not auth or auth.allow_all then return true end
+
     local sid = ply:SteamID64() or ""
-    return auth.allowed[sid] and true or false
+    return auth.allowed[sid] == true
 end
 
--- ===== État =====
-local ActiveByVeh      = ActiveByVeh or {} -- [vehIdx] = { url, startServerTime, byName, bySID64, lastChange, gain = 1 }
-local LastPlayByPly    = LastPlayByPly or {}
-local SyncPlayers      = SyncPlayers or {}
-local DriverCapBySID64 = DriverCapBySID64 or {}
+-- =========================================================
+--  État courant
+-- =========================================================
+local ActiveRadios      = ActiveRadios or {} -- [vehIdx] = { url, started, byName, bySID64, gain, controllerSID64 }
+local SyncedPlayers     = SyncedPlayers or {} -- [vehIdx] = { [ply] = true }
+local LastPlayByPlayer  = LastPlayByPlayer or {} -- [ply] = timestamp
+local DriverCapBySID64  = DriverCapBySID64 or {} -- [sid64] = vehIdx
 
+-- ConVars
 local cv_radius         = GetConVar("car_radio_radius")
 local cv_sync_hz        = GetConVar("car_radio_sync_hz")
 local cv_ply_cd         = GetConVar("car_radio_player_cooldown")
@@ -43,207 +49,321 @@ local cv_max_len        = GetConVar("car_radio_url_maxlen")
 local cv_max_active     = GetConVar("car_radio_max_active")
 local cv_cap_per_driver = GetConVar("car_radio_cap_per_driver")
 local cv_allow_replace  = GetConVar("car_radio_allow_replace")
+local cv_allow_pass     = GetConVar("car_radio_allow_passengers")
 
-local function isDriverOnly(ply, veh) return IsValid(ply) and IsValid(veh) and veh:GetDriver() == ply end
-local function countActive() local c=0 for _ in pairs(ActiveByVeh) do c=c+1 end return c end
+local function radius()
+    return (cv_radius and cv_radius:GetFloat()) or 1200
+end
 
-local function sendPlayToRecipients(veh, url, startServerTime, by, recipients)
+local function allowPassengers()
+    return cv_allow_pass and cv_allow_pass:GetBool()
+end
+
+local function CountActive()
+    local c = 0
+    for _ in pairs(ActiveRadios) do c = c + 1 end
+    return c
+end
+
+local function CanControlVehicle(ply, veh)
+    if not IsValid(ply) or not IsValid(veh) then return false end
+    if not ply:InVehicle() or ply:GetVehicle() ~= veh then return false end
+    if allowPassengers() then
+        return true
+    end
+    return veh:GetDriver() == ply
+end
+
+local function ControllerSID64(ply, veh)
+    if not allowPassengers() then
+        local driver = IsValid(veh) and veh:GetDriver()
+        if IsValid(driver) then
+            return driver:SteamID64() or ""
+        end
+    end
+    return ply:SteamID64() or ""
+end
+
+local function SendPlay(veh, data, recipients)
     if not Licensed() then return end
     if not IsValid(veh) then return end
-    local radius = cv_radius:GetFloat()
-
-    local d = ActiveByVeh[veh:EntIndex()]
-    local gain = (d and d.gain) or 1
-    local initiatorSID64 = (d and d.bySID64) or "" -- << on envoie qui a lancé
 
     if recipients == nil then
         recipients = {}
         for _, p in ipairs(player.GetAll()) do
-            if IsValid(p) and p:Alive() and p:GetPos():Distance(veh:GetPos()) <= radius * 1.2 then
-                recipients[#recipients+1] = p
+            if IsValid(p) and p:Alive() then
+                local distSqr = p:GetPos():DistToSqr(veh:GetPos())
+                if distSqr <= (radius() * 1.2) ^ 2 then
+                    recipients[#recipients + 1] = p
+                end
             end
         end
     end
+
     if #recipients == 0 then return end
 
-    -- ORDRE IMPORTANT côté client:
-    -- ent, url, startTime, byName, initiatorSID64, gain
-    net.Start("CAR_RADIO_Play")
-        net.WriteEntity(veh)
-        net.WriteString(url or "")
-        net.WriteFloat(startServerTime or CurTime())
-        net.WriteString(by or "")
-        net.WriteString(initiatorSID64 or "")
-        net.WriteFloat(gain or 1)
-    net.Send(recipients)
-end
-
-local function sendStopToAll(veh)
-    if not Licensed() then return end
-    if not IsValid(veh) then return end
-    net.Start("CAR_RADIO_Stop")
-        net.WriteEntity(veh)
-    net.Broadcast()
-end
-
--- ===== Handlers =====
-net.Receive("CAR_RADIO_RequestPlay", function(_, ply)
-    if not Licensed() then return end
-    local veh = net.ReadEntity()
-    local url = net.ReadString()
-    if not IsValid(ply) or not IsValid(veh) or not veh:IsVehicle() then return end
-    if not ply:InVehicle() or ply:GetVehicle() ~= veh then return end
-
-    if not IsPlyAllowed(ply) then ply:ChatPrint("[CarRadio] Vous n'êtes pas autorisé à utiliser la radio.") return end
-    if not isDriverOnly(ply, veh) then ply:ChatPrint("[CarRadio] Seul le conducteur peut lancer la musique.") return end
-    if not url or url == "" then ply:ChatPrint("[CarRadio] Merci de coller un lien YouTube.") return end
-    if #url > cv_max_len:GetInt() then ply:ChatPrint("[CarRadio] URL trop longue.") return end
-
-    local now   = CurTime()
-    local sid64 = ply:SteamID64() or ""
-
-    local pcd = cv_ply_cd:GetFloat()
-    if (LastPlayByPly[ply] or 0) + pcd > now then
-        ply:ChatPrint(string.format("[CarRadio] Patiente %.1fs.", (LastPlayByPly[ply] + pcd) - now)); return
-    end
-
-    if cv_cap_per_driver:GetBool() then
-        local capVehIdx = DriverCapBySID64[sid64]
-        if capVehIdx and ActiveByVeh[capVehIdx] and capVehIdx ~= veh:EntIndex() then
-            ply:ChatPrint("[CarRadio] Vous avez déjà une musique active sur un autre véhicule."); return
+    local idx = veh:EntIndex()
+    SyncedPlayers[idx] = SyncedPlayers[idx] or {}
+    for _, ply in ipairs(recipients) do
+        if IsValid(ply) then
+            SyncedPlayers[idx][ply] = true
         end
     end
 
-    local idx = veh:EntIndex()
-    local vd  = ActiveByVeh[idx]
-    local vcd = cv_veh_cd:GetFloat()
+    net.Start("CAR_RADIO_Play")
+        net.WriteEntity(veh)
+        net.WriteString(data.url or "")
+        net.WriteFloat(data.started or CurTime())
+        net.WriteString(data.byName or "")
+        net.WriteString(data.bySID64 or "")
+        net.WriteFloat(math.Clamp(data.gain or 1, 0, 1))
+    net.Send(recipients)
+end
 
-    if vd then
-        if not cv_allow_replace:GetBool() then ply:ChatPrint("[CarRadio] Une musique est déjà en cours sur ce véhicule."); return end
-        if (vd.lastChange or 0) + vcd > now then ply:ChatPrint("[CarRadio] Trop rapide, attends un peu."); return end
+local function SendStop(veh, idx, recipients)
+    if not Licensed() then return end
+    if not IsValid(veh) then return end
+
+    net.Start("CAR_RADIO_Stop")
+        net.WriteEntity(veh)
+    if recipients and #recipients > 0 then
+        net.Send(recipients)
     else
-        if countActive() >= cv_max_active:GetInt() then ply:ChatPrint("[CarRadio] Trop de radios actives, réessaie plus tard."); return end
+        net.Broadcast()
+    end
+end
+
+local function ResetSyncList(idx)
+    SyncedPlayers[idx] = nil
+end
+
+local function SyncTick()
+    if not Licensed() then return end
+    if next(ActiveRadios) == nil then return end
+
+    local r = radius()
+    local rSqr = (r * 0.95) ^ 2
+    local outerSqr = (r * 1.3) ^ 2
+
+    for idx, data in pairs(ActiveRadios) do
+        local veh = Entity(idx)
+        if not IsValid(veh) or not veh:IsVehicle() then
+            ActiveRadios[idx] = nil
+            ResetSyncList(idx)
+        else
+            SyncedPlayers[idx] = SyncedPlayers[idx] or {}
+            local toSend = {}
+
+            for ply, _ in pairs(SyncedPlayers[idx]) do
+                if not IsValid(ply) or not ply:Alive() then
+                    SyncedPlayers[idx][ply] = nil
+                elseif ply:GetPos():DistToSqr(veh:GetPos()) > outerSqr then
+                    SyncedPlayers[idx][ply] = nil
+                end
+            end
+
+            for _, ply in ipairs(player.GetAll()) do
+                if not IsValid(ply) or not ply:Alive() then continue end
+                if SyncedPlayers[idx][ply] then continue end
+                if ply:GetPos():DistToSqr(veh:GetPos()) <= rSqr then
+                    SyncedPlayers[idx][ply] = true
+                    toSend[#toSend + 1] = ply
+                end
+            end
+
+            if #toSend > 0 then
+                SendPlay(veh, data, toSend)
+            end
+        end
+    end
+end
+
+local function StopRadio(veh, idx)
+    idx = idx or (IsValid(veh) and veh:EntIndex())
+    if not idx then return end
+
+    local data = ActiveRadios[idx]
+    if not data then return end
+
+    ActiveRadios[idx] = nil
+
+    if data.controllerSID64 and DriverCapBySID64[data.controllerSID64] == idx then
+        DriverCapBySID64[data.controllerSID64] = nil
     end
 
-    ActiveByVeh[idx] = ActiveByVeh[idx] or {}
-    ActiveByVeh[idx].url = url
-    ActiveByVeh[idx].startServerTime = now
-    ActiveByVeh[idx].byName = ply:Nick()
-    ActiveByVeh[idx].bySID64 = sid64   -- << on marque l'initiateur
-    ActiveByVeh[idx].lastChange = now
-    ActiveByVeh[idx].gain = ActiveByVeh[idx].gain or 1
+    local recipients = {}
+    if SyncedPlayers[idx] then
+        for ply, _ in pairs(SyncedPlayers[idx]) do
+            if IsValid(ply) then
+                recipients[#recipients + 1] = ply
+            end
+        end
+    end
+    ResetSyncList(idx)
 
-    if veh:GetDriver() == ply then DriverCapBySID64[sid64] = idx end
-    LastPlayByPly[ply] = now
+    SendStop(veh, idx, recipients)
+end
+
+-- =========================================================
+--  Réception Play / Stop / Gain
+-- =========================================================
+net.Receive("CAR_RADIO_RequestPlay", function(_, ply)
+    if not Licensed() then return end
+
+    local veh = net.ReadEntity()
+    local url = net.ReadString()
+
+    if not IsValid(ply) or not IsValid(veh) or not veh:IsVehicle() then return end
+    if not ply:InVehicle() or ply:GetVehicle() ~= veh then return end
+
+    if not IsAuthorized(ply) then
+        ply:ChatPrint("[CarRadio] Vous n'êtes pas autorisé à utiliser la radio.")
+        return
+    end
+
+    if not CanControlVehicle(ply, veh) then
+        ply:ChatPrint("[CarRadio] Seul le conducteur peut utiliser la radio.")
+        return
+    end
+
+    if not url or url == "" then
+        ply:ChatPrint("[CarRadio] Merci de coller un lien YouTube.")
+        return
+    end
+
+    local maxLen = (cv_max_len and cv_max_len:GetInt()) or 200
+    if #url > maxLen then
+        ply:ChatPrint("[CarRadio] URL trop longue.")
+        return
+    end
+
+    local now = CurTime()
+    local sid64 = ply:SteamID64() or ""
+
+    local plyCooldown = (cv_ply_cd and cv_ply_cd:GetFloat()) or 0
+    local last = LastPlayByPlayer[ply] or 0
+    if last + plyCooldown > now then
+        ply:ChatPrint(string.format("[CarRadio] Patiente %.1fs avant de relancer.", (last + plyCooldown) - now))
+        return
+    end
+
+    local idx = veh:EntIndex()
+    local existing = ActiveRadios[idx]
+    local vehCooldown = (cv_veh_cd and cv_veh_cd:GetFloat()) or 0
+
+    if existing then
+        if not (cv_allow_replace and cv_allow_replace:GetBool()) then
+            ply:ChatPrint("[CarRadio] Une musique est déjà en cours sur ce véhicule.")
+            return
+        end
+        if (existing.lastChange or 0) + vehCooldown > now then
+            ply:ChatPrint("[CarRadio] Trop rapide, attends un peu.")
+            return
+        end
+    else
+        local maxActive = (cv_max_active and cv_max_active:GetInt()) or 50
+        if CountActive() >= maxActive then
+            ply:ChatPrint("[CarRadio] Trop de radios actives, réessaie plus tard.")
+            return
+        end
+    end
+
+    if cv_cap_per_driver and cv_cap_per_driver:GetBool() then
+        local controllerSID = ControllerSID64(ply, veh)
+        local capIdx = DriverCapBySID64[controllerSID]
+        if capIdx and ActiveRadios[capIdx] and capIdx ~= idx then
+            ply:ChatPrint("[CarRadio] Vous avez déjà une radio active sur un autre véhicule.")
+            return
+        end
+    end
+
+    ActiveRadios[idx] = ActiveRadios[idx] or {}
+    ActiveRadios[idx].url = url
+    ActiveRadios[idx].started = now
+    ActiveRadios[idx].byName = ply:Nick()
+    ActiveRadios[idx].bySID64 = sid64
+    ActiveRadios[idx].gain = ActiveRadios[idx].gain or 1
+    ActiveRadios[idx].lastChange = now
+    ActiveRadios[idx].controllerSID64 = ControllerSID64(ply, veh)
+
+    DriverCapBySID64[ActiveRadios[idx].controllerSID64] = idx
+    LastPlayByPlayer[ply] = now
+
+    SyncedPlayers[idx] = SyncedPlayers[idx] or {}
+    SyncedPlayers[idx][ply] = true
 
     ply:ChatPrint("[CarRadio] Lecture démarrée.")
-    sendPlayToRecipients(veh, url, now, ply:Nick())
+    SendPlay(veh, ActiveRadios[idx], nil)
 end)
 
 net.Receive("CAR_RADIO_RequestStop", function(_, ply)
     if not Licensed() then return end
+
     local veh = net.ReadEntity()
     if not IsValid(ply) or not IsValid(veh) or not veh:IsVehicle() then return end
     if not ply:InVehicle() or ply:GetVehicle() ~= veh then return end
 
-    if not IsPlyAllowed(ply) then ply:ChatPrint("[CarRadio] Vous n'êtes pas autorisé à utiliser la radio.") return end
-    if not isDriverOnly(ply, veh) then ply:ChatPrint("[CarRadio] Seul le conducteur peut arrêter la musique.") return end
+    if not IsAuthorized(ply) then return end
+    if not CanControlVehicle(ply, veh) then return end
 
-    local idx = veh:EntIndex()
-    local data = ActiveByVeh[idx]
-    if data then
-        ActiveByVeh[idx] = nil
-        SyncPlayers[idx]  = nil
-        if data.bySID64 and DriverCapBySID64[data.bySID64] == idx then DriverCapBySID64[data.bySID64] = nil end
-        sendStopToAll(veh)
-        ply:ChatPrint("[CarRadio] Radio arrêtée.")
-    end
+    StopRadio(veh, veh:EntIndex())
+    ply:ChatPrint("[CarRadio] Radio arrêtée.")
 end)
 
--- Réception gain conducteur -> broadcast
 net.Receive("CAR_RADIO_SetGain", function(_, ply)
     if not Licensed() then return end
+
     local veh = net.ReadEntity()
-    local g   = math.Clamp(net.ReadFloat() or 1, 0, 1)
+    local gain = math.Clamp(net.ReadFloat() or 1, 0, 1)
+
     if not IsValid(ply) or not IsValid(veh) or not veh:IsVehicle() then return end
     if not ply:InVehicle() or ply:GetVehicle() ~= veh then return end
-    if not IsPlyAllowed(ply) then return end
-    if not isDriverOnly(ply, veh) then return end
+
+    if not IsAuthorized(ply) then return end
+    if not CanControlVehicle(ply, veh) then return end
 
     local idx = veh:EntIndex()
-    if not ActiveByVeh[idx] then return end
-    ActiveByVeh[idx].gain = g
+    local data = ActiveRadios[idx]
+    if not data then return end
+
+    data.gain = gain
 
     net.Start("CAR_RADIO_SetGain")
         net.WriteEntity(veh)
-        net.WriteFloat(g)
+        net.WriteFloat(gain)
     net.Broadcast()
 end)
 
--- Nettoyage & sync
-hook.Add("EntityRemoved","CAR_RADIO_Cleanup_Ent", function(ent)
-    if not Licensed() then return end
+-- =========================================================
+--  Nettoyage & synchronisation
+-- =========================================================
+hook.Add("EntityRemoved", "CAR_RADIO_CleanupVehicle", function(ent)
     if not ent:IsVehicle() then return end
-    local idx = ent:EntIndex()
-    local data = ActiveByVeh[idx]
-    ActiveByVeh[idx] = nil
-    SyncPlayers[idx]  = nil
-    if data and data.bySID64 and DriverCapBySID64[data.bySID64] == idx then
-        DriverCapBySID64[data.bySID64] = nil
-    end
-    sendStopToAll(ent)
+    StopRadio(ent, ent:EntIndex())
 end)
 
-hook.Add("PlayerLeaveVehicle", "CAR_RADIO_FreeCapOnLeave", function(ply, veh)
-    if not Licensed() then return end
+hook.Add("PlayerLeaveVehicle", "CAR_RADIO_ReleaseCap", function(ply, veh)
     if not IsValid(ply) or not IsValid(veh) then return end
     local idx = veh:EntIndex()
-    local data = ActiveByVeh[idx]
-    if data and data.bySID64 and DriverCapBySID64[data.bySID64] == idx and veh:GetDriver() ~= ply then
-        DriverCapBySID64[data.bySID64] = nil
+    local data = ActiveRadios[idx]
+    if data and data.controllerSID64 and DriverCapBySID64[data.controllerSID64] == idx then
+        DriverCapBySID64[data.controllerSID64] = nil
     end
 end)
 
-local function syncTick()
-    if not Licensed() then return end
-    if table.IsEmpty(ActiveByVeh) then return end
-    local radius = cv_radius:GetFloat()
-    for vehIdx, data in pairs(ActiveByVeh) do
-        local veh = Entity(vehIdx)
-        if not IsValid(veh) or not veh:IsVehicle() then
-            ActiveByVeh[vehIdx] = nil
-            SyncPlayers[vehIdx]  = nil
-        else
-            SyncPlayers[vehIdx] = SyncPlayers[vehIdx] or {}
-            local recipients = {}
-            for _, p in ipairs(player.GetAll()) do
-                if IsValid(p) and p:Alive() then
-                    local dist = p:GetPos():Distance(veh:GetPos())
-                    local already = SyncPlayers[vehIdx][p]
-                    if dist <= radius * 0.95 then
-                        if not already then
-                            recipients[#recipients+1] = p
-                            SyncPlayers[vehIdx][p] = true
-                        end
-                    else
-                        if already then SyncPlayers[vehIdx][p] = nil end
-                    end
-                end
-            end
-            if #recipients > 0 then
-                sendPlayToRecipients(veh, data.url, data.startServerTime, data.byName, recipients)
-            end
-        end
-    end
-end
-
-hook.Add("Initialize", "CAR_RADIO_MakeSyncTimer", function()
-    timer.Create("CAR_RADIO_SyncTimer", 1 / math.max(0.2, GetConVar("car_radio_sync_hz"):GetFloat()), 0, syncTick)
+hook.Add("PlayerDisconnected", "CAR_RADIO_ClearCooldown", function(ply)
+    LastPlayByPlayer[ply] = nil
 end)
 
-timer.Simple(0, function()
+hook.Add("Initialize", "CAR_RADIO_StartSync", function()
+    local hz = math.max(0.2, cv_sync_hz and cv_sync_hz:GetFloat() or 1)
+    timer.Create("CAR_RADIO_Sync", 1 / hz, 0, SyncTick)
+end)
+
+-- Licence guard
+hook.Add("InitPostEntity", "CAR_RADIO_CheckLicense", function()
     if not _G.CAR_RADIO_LICENSE_OK then
-        print("[CarRadio] Licence check manquante. Arrêt.")
-        hook.Add("Think", "CAR_RADIO_LOCK", function() end)
+        print("[CarRadio] Licence invalide : désactivation.")
+        hook.Add("Think", "CAR_RADIO_LOCKED", function() end)
     end
 end)
