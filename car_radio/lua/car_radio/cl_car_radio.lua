@@ -123,15 +123,12 @@ body.unlocked #overlay{display:none;}
     holder.appendChild(node);
     return node;
   }
-  var origin = 'https://www.youtube.com';
-
   function ensurePlayer(id){
     if(players[id]) return players[id];
     var node=ensureContainer(id);
     var player=new YT.Player(node.id,{
       width:'320',height:'180',
-      host:origin,
-      playerVars:{autoplay:1,controls:0,disablekb:1,fs:0,rel:0,iv_load_policy:3,modestbranding:1,playsinline:1,enablejsapi:1,origin:origin},
+      playerVars:{autoplay:1,controls:0,disablekb:1,fs:0,rel:0,iv_load_policy:3,modestbranding:1,playsinline:1,enablejsapi:1},
       events:{
         onStateChange:function(evt){
           if(evt && evt.data===0 && window.gmod && gmod.VideoEnded){ try{ gmod.VideoEnded(id); }catch(e){} }
