@@ -153,6 +153,7 @@ body.unlocked #overlay{display:none;}
       if(!player) return;
       try{
         player.loadVideoById({videoId:videoId,startSeconds:startSeconds||0,suggestedQuality:'default'});
+        player.playVideo();
       }catch(e){}
     });
   }
