@@ -1,6 +1,11 @@
 -- sv_car_radio.lua — conducteur-only + 1 voiture max + whitelist + GAIN véhicule + envoie initiateur SID64
 if not SERVER then return end
 
+if istable(CAR_RADIO) and CAR_RADIO.__server_core_loaded then return end
+
+CAR_RADIO = CAR_RADIO or {}
+CAR_RADIO.__server_core_loaded = true
+
 util.AddNetworkString("CAR_RADIO_RequestPlay")
 util.AddNetworkString("CAR_RADIO_RequestStop")
 util.AddNetworkString("CAR_RADIO_Play")

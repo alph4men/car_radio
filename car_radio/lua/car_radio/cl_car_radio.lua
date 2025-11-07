@@ -1,7 +1,10 @@
 -- cl_car_radio.lua — UNLOCK global fiable + volume non-0 au démarrage + initiateur-only popup
 if not CLIENT then return end
 
+if istable(CAR_RADIO) and CAR_RADIO.__core_loaded then return end
+
 CAR_RADIO = CAR_RADIO or {}
+CAR_RADIO.__core_loaded = true
 
 -- [vehIdx] = { veh, url, started, gain=1, panel?, radius, falloff, lastVol, lastSeenInRangeAt }
 local Radios = Radios or {}
