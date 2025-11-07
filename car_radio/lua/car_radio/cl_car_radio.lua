@@ -113,7 +113,8 @@ body.unlocked #overlay{display:none;}
     document.createElement=function(tag){
       var el=_create(tag);
       if(tag && tag.toLowerCase()==='iframe'){
-        try{ el.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media; web-share'); }catch(e){}
+        try{ el.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media'); }catch(e){}
+        try{ el.setAttribute('allowfullscreen','true'); }catch(e){}
         try{ el.setAttribute('referrerpolicy','strict-origin-when-cross-origin'); }catch(e){}
       }
       return el;
@@ -189,7 +190,8 @@ body.unlocked #overlay{display:none;}
       try{
         var iframe = player.getIframe ? player.getIframe() : null;
         if(iframe){
-          try{ iframe.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media; web-share'); }catch(e){}
+          try{ iframe.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media'); }catch(e){}
+          try{ iframe.setAttribute('allowfullscreen','true'); }catch(e){}
           try{ iframe.setAttribute('referrerpolicy','strict-origin-when-cross-origin'); }catch(e){}
         }
         player.loadVideoById({videoId:videoId,startSeconds:startSeconds||0,suggestedQuality:'default'});
