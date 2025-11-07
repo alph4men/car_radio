@@ -42,92 +42,187 @@ end
 local function HtmlPage()
     return [[
 <!DOCTYPE html><html><head><meta charset="utf-8">
-<style>html,body{margin:0;padding:0;background:#000;overflow:hidden}
-#wrap{position:relative;width:320px;height:180px}
-#p{width:100%;height:100%}
-#unlockBtn{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;z-index:9999;cursor:pointer;border:0;background:transparent}
+<style>
+html,body{margin:0;padding:0;background:#05070c;color:#fff;font-family:Arial,Helvetica,sans-serif;height:100%;overflow:hidden}
+#wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 20% 20%,#1c2942 0%,#10131c 55%,#05070c 100%)}
+#player{position:relative;width:100%;height:100%;max-width:480px;aspect-ratio:16/9;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.45)}
+#unlock{position:absolute;inset:0;background:rgba(8,10,16,0.75);border:0;color:#fff;font-size:18px;letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s ease;z-index:10}
+#unlock.hidden{opacity:0;pointer-events:none}
+#unlock span{padding:14px 18px;border:1px solid rgba(120,200,255,.7);border-radius:22px;background:rgba(17,24,36,.7);box-shadow:0 0 12px rgba(120,200,255,.25);}
+#unlock:hover span{border-color:rgba(150,220,255,1);box-shadow:0 0 18px rgba(120,200,255,.45)}
+#error{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(180,60,60,.85);padding:10px 16px;border-radius:12px;font-size:13px;display:none;}
+iframe{width:100%;height:100%;border:0;border-radius:14px;}
 </style>
 <script>
-var s=document.createElement('script'); s.src="https://www.youtube.com/iframe_api"; (document.head||document.documentElement).appendChild(s);
-var player, ready=false, firstClickDone=false;
-var pendingVol=30;  // volume stocké, appliqué dès que possible
+(function(){
+  var apiRequested=false;
+  var ready=false;
+  var player=null;
+  var pendingVol=35;
+  var pendingId=null;
+  var pendingSeek=0;
+  var firstClickDone=false;
 
-function onYouTubeIframeAPIReady(){
-  player=new YT.Player('p',{
-    host:'https://www.youtube-nocookie.com',
-    videoId:'',
-    events:{'onReady':function(){
-      ready=true;
-      try{ player.setVolume(pendingVol); if(pendingVol>0) player.unMute(); }catch(e){}
-    }},
-    playerVars:{autoplay:1,controls:1,disablekb:0,fs:0,modestbranding:1,iv_load_policy:3,rel:0,playsinline:1,origin:'https://www.youtube.com'}
-  });
-}
+  function ensureAPI(){
+    if(apiRequested) return;
+    apiRequested=true;
+    var tag=document.createElement('script');
+    tag.src='https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  }
 
-function extractID(u){
-  try{
-    if(!u) return null;
-    var i=u.indexOf("v="); if(i>=0){ var id=u.substring(i+2); var c=id.indexOf("&"); if(c>=0) id=id.substring(0,c); c=id.indexOf("#"); if(c>=0) id=id.substring(0,c); return id; }
-    var j=u.indexOf("youtu.be/"); if(j>=0){ var id2=u.substring(j+9); var stop=-1; var q=id2.indexOf("?"); if(q>=0) stop=(stop<0?q:Math.min(stop,q)); var a=id2.indexOf("&"); if(a>=0) stop=(stop<0?a:Math.min(stop,a)); var h=id2.indexOf("#"); if(h>=0) stop=(stop<0?h:Math.min(stop,h)); if(stop>=0) id2=id2.substring(0,stop); return id2; }
-  }catch(e){}
-  return null;
-}
-
-function setUrl(u){
-  try{
-    var id=extractID(u);
-    if(id){
-      if(ready){ player.loadVideoById(id); }
-      else { // charge à la 1ère readiness
-        var _id = id;
-        var i = setInterval(function(){
-          if(ready){ clearInterval(i); try{ player.loadVideoById(_id); }catch(e){} }
-        }, 100);
+  window.onYouTubeIframeAPIReady=function(){
+    player=new YT.Player('yt-frame',{
+      videoId:'',
+      width:'100%',
+      height:'100%',
+      playerVars:{
+        autoplay:1,
+        controls:1,
+        disablekb:0,
+        fs:0,
+        rel:0,
+        iv_load_policy:3,
+        modestbranding:1,
+        playsinline:1,
+        enablejsapi:1
+      },
+      events:{
+        onReady:onReady,
+        onError:onError,
+        onStateChange:onStateChange
       }
+    });
+  };
+
+  function onReady(){
+    ready=true;
+    applyPending();
+    if(firstClickDone){
+      try{ player.playVideo(); }catch(e){}
     }
-  }catch(e){}
-}
+  }
 
-function seekPlay(sec){
-  try{
-    var s = Math.max(0,parseInt(sec||0,10));
-    if(ready){ player.seekTo(s,true); player.playVideo(); }
-    else {
-      var i = setInterval(function(){
-        if(ready){ clearInterval(i); try{ player.seekTo(s,true); player.playVideo(); }catch(e){} }
-      }, 100);
+  function onError(evt){
+    try{
+      showError('Lecture impossible (code '+evt.data+').');
+      if(window.gmod&&gmod.OnPlayerError){ gmod.OnPlayerError(evt.data||0); }
+    }catch(e){}
+  }
+
+  function onStateChange(evt){
+    if(evt && evt.data===0){
+      try{ if(window.gmod&&gmod.OnVideoEnded){ gmod.OnVideoEnded(); } }catch(e){}
     }
-  }catch(e){}
-}
+    if(evt && evt.data===1){ hideError(); }
+  }
 
-function setVol(v){
-  try{
-    var vv=Math.max(0,Math.min(100,parseInt(v||0,10)));
-    pendingVol = vv;
-    if(!ready) return;
-    if(vv<=0){ player.mute(); } else { player.unMute(); player.setVolume(vv); }
-  }catch(e){}
-}
+  function applyPending(){
+    if(!ready||!player) return;
+    try{
+      if(pendingId){
+        player.loadVideoById({videoId:pendingId,suggestedQuality:'default'});
+        pendingId=null;
+      }
+      if(pendingSeek>0){ player.seekTo(pendingSeek,true); pendingSeek=0; }
+      if(pendingVol<=0){ player.mute(); }
+      else { player.unMute(); player.setVolume(pendingVol); }
+      if(firstClickDone){ player.playVideo(); }
+    }catch(e){}
+  }
 
-function wake(){
-  try{
-    if(ready){ player.playVideo(); if(pendingVol>0) player.unMute(); player.setVolume(pendingVol); }
-  }catch(e){}
-}
+  function showError(msg){
+    var el=document.getElementById('error');
+    if(!el) return;
+    el.textContent=msg||'Erreur de lecture.';
+    el.style.display='block';
+  }
 
-function stop(){ try{ if(ready){ player.stopVideo(); } }catch(e){} }
+  function hideError(){
+    var el=document.getElementById('error');
+    if(!el) return;
+    el.style.display='none';
+  }
 
-function firstUserClick(){ if(firstClickDone) return; firstClickDone=true;
-  try{ pendingVol = Math.max(25,pendingVol); }catch(e){}
-  try{ if(ready){ player.playVideo(); player.unMute(); player.setVolume(pendingVol); } }catch(e){}
-  try{ var b=document.getElementById('unlockBtn'); if(b) b.style.display='none'; }catch(e){}
-  try{ if(window.gmod && gmod.Interact){ gmod.Interact(); } }catch(e){}
-}
+  function extractID(url){
+    if(!url) return null;
+    try{
+      var clean=url.trim();
+      if(clean.indexOf('youtu.be/')>=0){
+        clean=clean.split('youtu.be/')[1];
+        clean=clean.split('?')[0].split('&')[0].split('#')[0];
+        return clean;
+      }
+      var m=clean.match(/(?:v=|vi=)([A-Za-z0-9_-]{6,})/);
+      if(m&&m[1]) return m[1];
+      m=clean.match(/[A-Za-z0-9_-]{11}/);
+      if(m&&m[0]) return m[0];
+    }catch(e){}
+    return null;
+  }
 
-window.addEventListener('DOMContentLoaded',function(){
-  var b=document.getElementById('unlockBtn'); if(b){ b.addEventListener('click',firstUserClick,{passive:true}); }
-});
-</script></head><body><div id="wrap"><div id="p"></div><button id="unlockBtn"></button></div></body></html>
+  window.setUrl=function(url){
+    var id=extractID(url);
+    if(!id){ showError('URL YouTube invalide.'); return; }
+    hideError();
+    pendingId=id;
+    ensureAPI();
+    applyPending();
+  };
+
+  window.seekPlay=function(sec){
+    var s=parseInt(sec||0,10);
+    if(isNaN(s)||s<0) s=0;
+    pendingSeek=s;
+    ensureAPI();
+    applyPending();
+  };
+
+  window.setVol=function(vol){
+    var v=parseInt(vol||0,10);
+    if(isNaN(v)) v=0;
+    v=Math.max(0,Math.min(100,v));
+    pendingVol=v;
+    applyPending();
+  };
+
+  window.wake=function(){
+    ensureAPI();
+    firstClickDone=true;
+    hideError();
+    applyPending();
+  };
+
+  window.stop=function(){
+    try{ if(player){ player.stopVideo(); } }catch(e){}
+  };
+
+  window.firstUserClick=function(){
+    if(firstClickDone) return;
+    firstClickDone=true;
+    var btn=document.getElementById('unlock');
+    if(btn){ btn.classList.add('hidden'); setTimeout(function(){ btn.remove(); },220); }
+    pendingVol=Math.max(pendingVol,35);
+    ensureAPI();
+    applyPending();
+    if(window.gmod && gmod.Interact){ try{ gmod.Interact(); }catch(e){} }
+  };
+
+  document.addEventListener('DOMContentLoaded',function(){
+    ensureAPI();
+    var btn=document.getElementById('unlock');
+    if(btn){ btn.addEventListener('click', function(){ window.firstUserClick(); }, {passive:true}); }
+  });
+})();
+</script></head><body>
+<div id="wrap">
+  <div id="player">
+    <div id="unlock"><span>Activer l'audio</span></div>
+    <iframe id="yt-frame" allow="autoplay; encrypted-media"></iframe>
+    <div id="error">Erreur de lecture.</div>
+  </div>
+</div>
+</body></html>
 ]]
 end
 
@@ -147,10 +242,46 @@ local function NudgeAllPlayersAfterUnlock()
     for _, R in pairs(Radios) do
         if IsValid(R.panel) then
             -- wake() + petit volume pour sortir du mute ; Think recalcule le vrai volume ensuite
-            R.panel:QueueJavascript("try{ wake(); setVol(30); }catch(e){}")
+            R.panel:QueueJavascript("try{ wake(); setVol(40); }catch(e){}")
             R.lastVol = nil
         end
     end
+end
+
+local function SetupPanelCallbacks(panel, vehIdx)
+    if not IsValid(panel) then return end
+
+    panel:AddFunction("gmod", "OnPlayerError", function(code)
+        local veh = Radios[vehIdx] and Radios[vehIdx].veh
+        if not IsValid(veh) then return end
+        local driver = veh:GetDriver()
+        local vehicleName
+        if IsValid(driver) then
+            vehicleName = string.format("%s (%s)", driver:Nick(), veh:GetClass())
+        else
+            vehicleName = veh:GetClass()
+        end
+
+        chat.AddText(Color(255, 120, 120), "[CarRadio] ", color_white,
+            string.format("Lecture YouTube bloquée pour %s (code %s).", vehicleName or "ce véhicule", tostring(code or "?")))
+    end)
+
+    panel:AddFunction("gmod", "OnVideoEnded", function()
+        local veh = Radios[vehIdx] and Radios[vehIdx].veh
+        if not IsValid(veh) then return end
+        local driver = veh:GetDriver()
+        if IsValid(driver) and driver == LocalPlayer() then
+            chat.AddText(Color(120,200,255), "[CarRadio] ", color_white, "La vidéo est terminée.")
+        end
+    end)
+end
+
+local function PanelLoadMedia(panel, url, seekSeconds, initialVol)
+    if not IsValid(panel) then return end
+    local qurl = js_quote(url or "")
+    local seek = math.max(0, math.floor(seekSeconds or 0))
+    local vol = math.Clamp(math.floor(initialVol or 35), 0, 100)
+    panel:QueueJavascript(("try{ setUrl(%s); setVol(%d); seekPlay(%d); }catch(e){}"):format(qurl, vol, seek))
 end
 
 ----------------------------------------------------------------------
@@ -218,23 +349,33 @@ local function EnsureGlobalUnlockUI()
 
     local fr = vgui.Create("DPanel")
     GlobalUnlockUI = fr
-    fr:SetSize(360, 40)
-    fr:SetPos(ScrW() - fr:GetWide() - 16, 16)
+    fr:SetSize(380, 58)
+    fr:SetPos(ScrW() - fr:GetWide() - 16, 20)
     fr:SetZPos(10000)
     fr:SetMouseInputEnabled(true)
     fr:SetKeyboardInputEnabled(false)
 
     function fr:Paint(w,h)
-        surface.SetDrawColor(10,12,16,235); surface.DrawRect(0,0,w,h)
-        surface.SetDrawColor(120,200,255,170); surface.DrawOutlinedRect(0,0,w,h,2)
-        draw.SimpleText("Activer l'audio des radios (1 clic)", "Trebuchet18", 10, h/2, Color(220,230,255), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        surface.SetDrawColor(12,14,20,230)
+        surface.DrawRect(0,0,w,h)
+        surface.SetDrawColor(120,200,255,140)
+        surface.DrawOutlinedRect(0,0,w,h,1)
+        draw.SimpleText("Les radios sont en sourdine.", "Trebuchet18", 12, 16, Color(220,230,255), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText("Clique pour autoriser l'audio YouTube.", "Trebuchet18", 12, h-18, Color(180,200,255), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
     end
 
     local btn = vgui.Create("DButton", fr)
-    btn:SetText("Activer")
-    btn:SetWide(96); btn:SetTall(26)
-    btn:SetPos(fr:GetWide()-btn:GetWide()-8, (fr:GetTall()-btn:GetTall())/2)
+    btn:SetText("Débloquer maintenant")
+    btn:SetFont("Trebuchet18")
+    btn:SetWide(178); btn:SetTall(32)
+    btn:SetPos(fr:GetWide()-btn:GetWide()-10, (fr:GetTall()-btn:GetTall())/2)
     btn:SetMouseInputEnabled(true)
+    btn.Paint = function(self,w,h)
+        local hovered = self:IsHovered()
+        draw.RoundedBox(12, 0, 0, w, h, hovered and Color(90,140,220) or Color(70,110,180))
+        draw.SimpleText(self:GetText(), "Trebuchet18", w/2, h/2, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        return true
+    end
     btn.DoClick = function()
         OpenMiniUnlockPopup(function() RemoveGlobalUnlockUI() end)
     end
@@ -268,26 +409,27 @@ local function EnsureAudioUnlockedForInitiator(vehIdx, url, seekSeconds, onReady
     if BootstrapCtx then return end
 
     local frm = vgui.Create("DFrame")
-    frm:SetTitle("Car Radio — Activer l'audio (1 clic)")
-    frm:SetSize(360, 260)
+    frm:SetTitle("Car Radio — Débloquer le son")
+    frm:SetSize(420, 280)
     frm:Center()
     frm:MakePopup()
+    frm:SetSizable(false)
 
     local lbl = vgui.Create("DLabel", frm)
-    lbl:Dock(TOP); lbl:DockMargin(10,8,10,6)
-    lbl:SetText("Clique une fois dans la vidéo pour activer le son (YouTube).")
+    lbl:Dock(TOP); lbl:DockMargin(14,12,14,6)
+    lbl:SetText("Clique sur le bouton \"Activer l'audio\" ci-dessous pour autoriser YouTube à lire la vidéo.")
+    lbl:SetWrap(true)
     lbl:SetTextColor(Color(230,230,230))
 
     local dhtml = vgui.Create("DHTML", frm)
-    dhtml:Dock(FILL); dhtml:DockMargin(10,4,10,10)
+    dhtml:Dock(FILL); dhtml:DockMargin(14,4,14,14)
     dhtml:SetHTML(HtmlPage())
+    SetupPanelCallbacks(dhtml, vehIdx)
 
     BootstrapCtx = { frame = frm, dhtml = dhtml, vehIdx = vehIdx }
 
     dhtml:AddFunction("gmod","Interact", function()
-        local qurl = js_quote(url or "")
-        dhtml:QueueJavascript(("try{ setUrl(%s); }catch(e){}"):format(qurl))
-        dhtml:QueueJavascript(("try{ seekPlay(%d); setVol(40); }catch(e){}"):format(math.max(0, math.floor(seekSeconds or 0))))
+        PanelLoadMedia(dhtml, url or "", seekSeconds, 45)
 
         -- 🔹 ferme automatiquement après 1 seconde
         timer.Simple(1, function()
@@ -296,6 +438,7 @@ local function EnsureAudioUnlockedForInitiator(vehIdx, url, seekSeconds, onReady
             dhtml:SetParent(hidden)
             dhtml:SetSize(hidden:GetWide(), hidden:GetTall())
             dhtml:SetPos(0, 0)
+            SetupPanelCallbacks(dhtml, vehIdx)
             if onReadyWithPanel then onReadyWithPanel(dhtml) end
             if IsValid(frm) then frm:Close() end
             BootstrapCtx = nil
@@ -303,8 +446,7 @@ local function EnsureAudioUnlockedForInitiator(vehIdx, url, seekSeconds, onReady
     end)
 
     function dhtml:OnDocumentReady(_)
-        local qurl = js_quote(url or "")
-        self:QueueJavascript(("try{ setUrl(%s); setVol(35); }catch(e){}"):format(qurl))
+        PanelLoadMedia(self, url or "", seekSeconds, 40)
     end
 
     function frm:OnClose()
@@ -346,6 +488,11 @@ net.Receive("CAR_RADIO_Play", function()
     R.falloff = falloff()
     R.lastSeenInRangeAt = 0
     R.initiatorSID64 = initiatorSID64 or ""
+
+    if IsValid(R.panel) then
+        local sinceStart = CurTime() - (R.started or CurTime())
+        PanelLoadMedia(R.panel, url or "", sinceStart, (R.lastVol or 40))
+    end
 
     -- IMPORTANT : si je ne suis pas l'initiateur ET pas encore unlock → montrer la barre
     if not AudioUnlockedGlobal then
@@ -433,15 +580,14 @@ hook.Add("Think", "CAR_RADIO_Update_10Hz", function()
                     pnl:SetSize(hidden:GetWide(), hidden:GetTall())
                     pnl:SetPos(0, 0)
                     pnl:SetHTML(HtmlPage())
+                    SetupPanelCallbacks(pnl, idx)
                     function pnl:OnDocumentReady(_)
-                        local qurl = js_quote(R.url or "")
                         local seek = math.max(0, math.floor(CurTime() - (R.started or CurTime())))
-                        -- setVol(30) même si ready pas encore true, sera appliqué via pendingVol
-                        self:QueueJavascript(("try{ setUrl(%s); setVol(30); seekPlay(%d); }catch(e){}"):format(qurl, seek))
+                        PanelLoadMedia(self, R.url or "", seek, 35)
                         -- si déjà unlock global → wake + légère hausse
                         if AudioUnlockedGlobal then
                             timer.Simple(0.3, function()
-                                if IsValid(self) then self:QueueJavascript("try{ wake(); setVol(40); }catch(e){}") end
+                                if IsValid(self) then self:QueueJavascript("try{ wake(); setVol(45); }catch(e){}") end
                             end)
                         end
                     end
