@@ -150,8 +150,7 @@ body.unlocked #overlay{display:none;}
         iv_load_policy:3,
         modestbranding:1,
         playsinline:1,
-        enablejsapi:1,
-        origin:window.location.origin || 'https://www.youtube-nocookie.com'
+        enablejsapi:1
       },
       events:{
         onStateChange:function(evt){
