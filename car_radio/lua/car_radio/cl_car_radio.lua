@@ -101,7 +101,10 @@ body.unlocked #overlay{display:none;}
 (function(){
   var unlocked=false;
   var players={};
+  var playerHostById={};
+  var currentVideoById={};
   var pending=[];
+  var playerHosts=['https://www.youtube-nocookie.com','https://www.youtube.com'];
   function loadAPI(){
     if(window.__ytRequested) return;
     window.__ytRequested=true;
@@ -127,11 +130,17 @@ body.unlocked #overlay{display:none;}
     holder.appendChild(node);
     return node;
   }
-  function ensurePlayer(id){
+  function hostForAttempt(attempt){
+    return playerHosts[(attempt||0) % playerHosts.length];
+  }
+  function ensurePlayer(id, attempt){
     if(players[id]) return players[id];
+    attempt=attempt||0;
+    playerHostById[id]=hostForAttempt(attempt);
     var node=ensureContainer(id);
     var player=new YT.Player(node.id,{
       width:'320',height:'180',
+      host:playerHostById[id],
       playerVars:{
         autoplay:1,
         controls:0,
@@ -141,31 +150,51 @@ body.unlocked #overlay{display:none;}
         iv_load_policy:3,
         modestbranding:1,
         playsinline:1,
-        enablejsapi:1
+        enablejsapi:1,
+        origin:window.location.origin || 'https://www.youtube-nocookie.com'
       },
       events:{
         onStateChange:function(evt){
           if(evt && evt.data===0 && window.gmod && gmod.VideoEnded){ try{ gmod.VideoEnded(id); }catch(e){} }
         },
         onError:function(evt){
-          if(window.gmod && gmod.VideoError){
-            var code = evt && evt.data ? evt.data : 0;
-            try{ gmod.VideoError(id, code); }catch(e){}
+          var code = evt && evt.data ? evt.data : 0;
+          if((code===150 || code===101) && (currentVideoById[id] && (currentVideoById[id].attempt||0)+1 < playerHosts.length)){
+            var nextAttempt=(currentVideoById[id].attempt||0)+1;
+            var state=currentVideoById[id];
+            destroy(id);
+            setVideo(id, state.videoId, state.startSeconds, nextAttempt);
+            return;
           }
+          notifyError(id, code);
         }
       }
     });
     players[id]=player;
     return player;
   }
-  function setVideo(id, videoId, startSeconds){
+  function notifyError(id, code){
+    if(window.gmod && gmod.VideoError){
+      try{ gmod.VideoError(id, code); }catch(e){}
+    }
+  }
+  function setVideo(id, videoId, startSeconds, attempt){
     queue(function(){
-      var player=ensurePlayer(id);
+      attempt=attempt||0;
+      currentVideoById[id]={ videoId:videoId, startSeconds:startSeconds||0, attempt:attempt };
+      var player=ensurePlayer(id, attempt);
       if(!player) return;
       try{
         player.loadVideoById({videoId:videoId,startSeconds:startSeconds||0,suggestedQuality:'default'});
         player.playVideo();
-      }catch(e){}
+      }catch(e){
+        if(attempt + 1 < playerHosts.length){
+          destroy(id);
+          setVideo(id, videoId, startSeconds, attempt + 1);
+          return;
+        }
+        notifyError(id, 150);
+      }
     });
   }
   function setVolume(id, volume){
@@ -191,6 +220,8 @@ body.unlocked #overlay{display:none;}
       var player=players[id];
       if(player){ try{ player.destroy(); }catch(e){} }
       delete players[id];
+      delete currentVideoById[id];
+      delete playerHostById[id];
       var node=document.getElementById('player-'+id);
       if(node && node.parentNode){ node.parentNode.removeChild(node); }
     });
