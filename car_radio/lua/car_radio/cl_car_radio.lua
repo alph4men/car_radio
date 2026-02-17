@@ -44,12 +44,16 @@ local function ExtractVideoID(url)
     local clean = string.Trim(url)
     if clean == "" then return nil end
 
+    clean = clean:gsub("&amp;", "&")
+
     local patterns = {
         "youtu%.be/([A-Za-z0-9_-]+)",
         "youtube%.com/watch%?[^#]*v=([A-Za-z0-9_-]+)",
+        "music%.youtube%.com/watch%?[^#]*v=([A-Za-z0-9_-]+)",
         "youtube%.com/embed/([A-Za-z0-9_-]+)",
         "youtube%.com/v/([A-Za-z0-9_-]+)",
-        "youtube%.com/shorts/([A-Za-z0-9_-]+)"
+        "youtube%.com/shorts/([A-Za-z0-9_-]+)",
+        "youtube%-nocookie%.com/embed/([A-Za-z0-9_-]+)"
     }
 
     for _, patt in ipairs(patterns) do

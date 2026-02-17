@@ -135,3 +135,34 @@ function CAR_RADIO_OpenMenu(veh)
         fr:Close()
     end
 end
+
+local function LocalVehicle()
+    local lp = LocalPlayer()
+    if not IsValid(lp) or not lp:InVehicle() then
+        chat.AddText(Color(255, 120, 120), "[CarRadio] ", color_white, "Tu dois être dans un véhicule.")
+        return nil
+    end
+
+    local veh = lp:GetVehicle()
+    if not IsValid(veh) or not veh:IsVehicle() then
+        chat.AddText(Color(255, 120, 120), "[CarRadio] ", color_white, "Véhicule invalide.")
+        return nil
+    end
+
+    return veh
+end
+
+concommand.Add("car_radio_menu", function()
+    local veh = LocalVehicle()
+    if not IsValid(veh) then return end
+    CAR_RADIO_OpenMenu(veh)
+end)
+
+concommand.Add("car_radio_stop", function()
+    local veh = LocalVehicle()
+    if not IsValid(veh) then return end
+
+    net.Start("CAR_RADIO_RequestStop")
+        net.WriteEntity(veh)
+    net.SendToServer()
+end)
