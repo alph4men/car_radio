@@ -99,31 +99,6 @@ body.unlocked #overlay{display:none;}
 </style>
 <script>
 (function(){
-  var ORIGIN='https://www.youtube.com';
-  var lastVideoId=null;
-  function currentRef(){
-    return lastVideoId ? ORIGIN+'/watch?v='+lastVideoId : ORIGIN+'/';
-  }
-  try{
-    Object.defineProperty(document,'referrer',{get:function(){return currentRef();}});
-    Object.defineProperty(document,'URL',{get:function(){return currentRef();}});
-    Object.defineProperty(document,'documentURI',{get:function(){return currentRef();}});
-  }catch(e){}
-  try{
-    Object.defineProperty(window,'origin',{get:function(){return ORIGIN;}});
-  }catch(e){}
-  try{
-    var _create=document.createElement.bind(document);
-    document.createElement=function(tag){
-      var el=_create(tag);
-      if(tag && tag.toLowerCase()==='iframe'){
-        try{ el.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media'); }catch(e){}
-        try{ el.setAttribute('allowfullscreen','true'); }catch(e){}
-        try{ el.setAttribute('referrerpolicy','strict-origin-when-cross-origin'); }catch(e){}
-      }
-      return el;
-    };
-  }catch(e){}
   var unlocked=false;
   var players={};
   var pending=[];
@@ -157,7 +132,6 @@ body.unlocked #overlay{display:none;}
     var node=ensureContainer(id);
     var player=new YT.Player(node.id,{
       width:'320',height:'180',
-      host:'https://www.youtube.com',
       playerVars:{
         autoplay:1,
         controls:0,
@@ -167,9 +141,7 @@ body.unlocked #overlay{display:none;}
         iv_load_policy:3,
         modestbranding:1,
         playsinline:1,
-        enablejsapi:1,
-        origin:ORIGIN,
-        widget_referrer:currentRef()
+        enablejsapi:1
       },
       events:{
         onStateChange:function(evt){
@@ -188,16 +160,9 @@ body.unlocked #overlay{display:none;}
   }
   function setVideo(id, videoId, startSeconds){
     queue(function(){
-      lastVideoId = videoId || null;
       var player=ensurePlayer(id);
       if(!player) return;
       try{
-        var iframe = player.getIframe ? player.getIframe() : null;
-        if(iframe){
-          try{ iframe.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media'); }catch(e){}
-          try{ iframe.setAttribute('allowfullscreen','true'); }catch(e){}
-          try{ iframe.setAttribute('referrerpolicy','strict-origin-when-cross-origin'); }catch(e){}
-        }
         player.loadVideoById({videoId:videoId,startSeconds:startSeconds||0,suggestedQuality:'default'});
         player.playVideo();
       }catch(e){}

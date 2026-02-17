@@ -3,11 +3,10 @@ if not SERVER then return end
 
 util.AddNetworkString("CAR_RADIO_LicenseWarn")
 
-_G.CAR_RADIO_LICENSE_OK     = true
+_G.CAR_RADIO_LICENSE_OK     = false
 _G.CAR_RADIO_LICENSE_VALID  = false -- fail-closed par défaut
 
--- ⚠️ Remplace par ton JSON RAW
-local LICENSE_URL = "https://raw.githubusercontent.com/alph4men/car_radio/main/license.json"
+CreateConVar("car_radio_license_url", "https://raw.githubusercontent.com/alph4men/car_radio/main/license.json", { FCVAR_ARCHIVE }, "URL JSON distante de licence")
 
 -- Override IP:PORT (convar ou data file)
 CreateConVar("car_radio_license_ip_override", "", { FCVAR_ARCHIVE }, "Force l'IP:PORT pour la licence (ex: 51.222.145.32:27015)")
@@ -52,6 +51,13 @@ local function licenseLockdown(reason, ipDisplay)
     _G.CAR_RADIO_LICENSE_OK = false
     _G.CAR_RADIO_LICENSE_VALID = false
     broadcastLicenseWarn(ipDisplay)
+end
+
+local function licenseUnlock(ipDisplay, sourceLabel)
+    _G.CAR_RADIO_LICENSE_OK = true
+    _G.CAR_RADIO_LICENSE_VALID = true
+    local lbl = sourceLabel and (" via " .. sourceLabel) or ""
+    print(string.format("[CarRadio] ✅ Licence valide pour ce serveur (%s%s).", tostring(ipDisplay), lbl))
 end
 
 local function decodeLicenseJSON(raw)
@@ -101,7 +107,14 @@ local function processLicenseTable(tbl, ip, sourceLabel)
         return true
     end
 
-    local list = istable(tbl.authorized_ips) and tbl.authorized_ips or nil
+    local list = nil
+    if istable(tbl.authorized_ips) then
+        list = tbl.authorized_ips
+    elseif istable(tbl.allowed_ips) then
+        list = tbl.allowed_ips
+    elseif istable(tbl.ips) then
+        list = tbl.ips
+    end
     if not list then
         return false, "Champ authorized_ips manquant."
     end
@@ -112,9 +125,7 @@ local function processLicenseTable(tbl, ip, sourceLabel)
     end
 
     if authorized then
-        _G.CAR_RADIO_LICENSE_VALID = true
-        local lbl = sourceLabel and (" via " .. sourceLabel) or ""
-        print(string.format("[CarRadio] ✅ Licence valide pour ce serveur (%s%s).", tostring(ip), lbl))
+        licenseUnlock(ip, sourceLabel)
         return true
     end
 
@@ -193,8 +204,7 @@ local function resolveServerIPAsync(cb)
     })
 end
 
--- ========= CHECK =========
-timer.Simple(5, function()
+local function runLicenseCheck()
     resolveServerIPAsync(function(ip)
         print("[CarRadio] Vérification de licence pour: " .. tostring(ip))
 
@@ -202,8 +212,13 @@ timer.Simple(5, function()
             tryLocalFallback(ip, reason or "Licence distante indisponible.")
         end
 
+        local licenseUrl = GetConVarString("car_radio_license_url")
+        if not isstring(licenseUrl) or licenseUrl == "" then
+            licenseUrl = "https://raw.githubusercontent.com/alph4men/car_radio/main/license.json"
+        end
+
         http.Fetch(
-            LICENSE_URL,
+            licenseUrl,
             function(body)
                 local data = decodeLicenseJSON(body)
                 if not data then
@@ -221,4 +236,8 @@ timer.Simple(5, function()
             end
         )
     end)
-end)
+end
+
+-- ========= CHECK =========
+timer.Simple(5, runLicenseCheck)
+timer.Create("CAR_RADIO_LicenseRecheck", 300, 0, runLicenseCheck)
