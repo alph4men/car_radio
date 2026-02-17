@@ -99,6 +99,18 @@ body.unlocked #overlay{display:none;}
 </style>
 <script>
 (function(){
+  // GMod CEF peut afficher un warning YouTube bénin:
+  // "Unrecognized feature: 'web-share'".
+  // Cela ne casse pas la lecture, on le masque pour éviter la confusion.
+  var nativeWarn = console && console.warn;
+  if (nativeWarn) {
+    console.warn = function(){
+      var msg = arguments && arguments[0] ? String(arguments[0]) : '';
+      if(msg.indexOf("Unrecognized feature: 'web-share'") !== -1){ return; }
+      return nativeWarn.apply(console, arguments);
+    };
+  }
+
   var unlocked=false;
   var players={};
   var playerHostById={};
@@ -153,6 +165,11 @@ body.unlocked #overlay{display:none;}
         enablejsapi:1
       },
       events:{
+        onReady:function(){
+          // Force un démarrage "muted" pour contourner certaines politiques autoplay CEF.
+          // Le volume réel est ensuite appliqué par setVolume().
+          try{ player.mute(); }catch(e){}
+        },
         onStateChange:function(evt){
           if(evt && evt.data===0 && window.gmod && gmod.VideoEnded){ try{ gmod.VideoEnded(id); }catch(e){} }
         },
