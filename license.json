@@ -1,14 +1,9 @@
 {
   "authorized_ips": [
-    "0.0.0.0:0",        // autorise tous les ports sur cette IP
-    "31.39.238.83:27015", // autorise uniquement le port 27015
-    "192.168.1.104:27015"  // exemple LAN / tests
+    "0.0.0.0:0",
+    "31.39.238.83:27015",
+    "192.168.1.104:27015"
   ],
   "disabled": false,
   "message": "Addon désactivé par l'auteur."
 }
-
-
-
-
-

@@ -49,8 +49,24 @@ end
 local function licenseLockdown(reason, ipDisplay)
     reason = reason or "Licence invalide."
     print("[CarRadio] 🚫 LOCKDOWN: " .. reason)
+    _G.CAR_RADIO_LICENSE_OK = false
     _G.CAR_RADIO_LICENSE_VALID = false
     broadcastLicenseWarn(ipDisplay)
+end
+
+local function decodeLicenseJSON(raw)
+    if not isstring(raw) or raw == "" then return nil end
+    local cleaned = raw
+    cleaned = cleaned:gsub("//.-\n", "\n")
+    cleaned = cleaned:gsub("//.-$", "")
+
+    local ok, data = pcall(util.JSONToTable, cleaned)
+    if ok and istable(data) then return data end
+
+    ok, data = pcall(util.JSONToTable, raw)
+    if ok and istable(data) then return data end
+
+    return nil
 end
 
 local LOCAL_LICENSE_PATHS = {
@@ -113,8 +129,8 @@ local function tryLocalFallback(ip, baseReason)
         return
     end
 
-    local ok, data = pcall(util.JSONToTable, body)
-    if not ok then
+    local data = decodeLicenseJSON(body)
+    if not data then
         licenseLockdown((baseReason or "Licence invalide.") .. " (fallback local corrompu)", ip)
         return
     end
@@ -189,8 +205,8 @@ timer.Simple(5, function()
         http.Fetch(
             LICENSE_URL,
             function(body)
-                local ok, data = pcall(util.JSONToTable, body)
-                if not ok then
+                local data = decodeLicenseJSON(body)
+                if not data then
                     handleBadRemote("Réponse de licence invalide.")
                     return
                 end
